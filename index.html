@@ -764,15 +764,8 @@ async function handleSession(session, eventName = '') {
   }
   if (passwordSetupMode) return;
   if (activeUserId === session.user.id) return;
-  const { data: profile, error } = await supabase.from('roadmap_profiles').select('role').eq('user_id', session.user.id).single();
-  if (error || !profile) {
-    document.getElementById('authMessage').textContent = error
-      ? `Inloggen is gelukt, maar het gebruikersprofiel kon niet worden geladen: ${error.message}`
-      : 'Inloggen is gelukt, maar dit account heeft geen profiel voor deze roadmap.';
-    await supabase.auth.signOut();
-    return;
-  }
-  currentUserRole = profile.role;
+  const { data: profile, error } = await supabase.from('roadmap_profiles').select('role').eq('user_id', session.user.id).maybeSingle();
+  currentUserRole = !error && profile?.role === 'admin' ? 'admin' : 'user';
   activeUserId = session.user.id;
   document.querySelector('[data-view="edit"]').hidden = currentUserRole !== 'admin';
   document.querySelector('[data-view="admin"]').hidden = currentUserRole !== 'admin';
@@ -782,6 +775,15 @@ async function handleSession(session, eventName = '') {
   document.getElementById('appShell').hidden = false;
   document.body.classList.add('authenticated');
   await init();
+  if (error || !profile) {
+    const notice = document.getElementById('connectionNotice');
+    const existingMessage = notice.hidden ? '' : `${notice.textContent} `;
+    const roleMessage = error
+      ? `Je bent ingelogd als gebruiker, maar je accountrol kon niet worden geladen: ${error.message}`
+      : 'Je bent ingelogd als gebruiker; voor dit account is geen beheerdersrol ingesteld.';
+    notice.textContent = `${existingMessage}${roleMessage}`;
+    notice.hidden = false;
+  }
 }
 
 function processAuthSession(session, eventName) {
