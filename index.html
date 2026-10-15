@@ -163,8 +163,9 @@ const SUPABASE_URL = 'https://hwurwmqnqdbknvtfnnub.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_0qP8iv4EU2uHwwgRkHN0lw_lBY-YHpw';
 const authQueryParams = new URLSearchParams(location.search);
 const authHashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
-let inviteCallback = authQueryParams.get('type') === 'invite'
-  || authHashParams.get('type') === 'invite'
+const authCallbackType = authQueryParams.get('type') || authHashParams.get('type') || '';
+let authCallbackPending = ['code', 'token_hash', 'access_token'].some(key => authQueryParams.has(key) || authHashParams.has(key))
+  || ['invite', 'recovery'].includes(authCallbackType)
   || authQueryParams.get('invite') === '1';
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const SP_MODULES_LIST_TITLE = 'thra_roadmap';
@@ -180,6 +181,8 @@ let usingSharePoint = false;
 let currentUserRole = 'user';
 let activeUserId = null;
 let passwordSetupMode = null;
+let sessionTransitionUserId = null;
+let sessionTransitionPromise = null;
 
 function getTodayDmy(){const d=new Date();return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`;}
 function parseQuarter(value){const q=String(value||'').toUpperCase().trim();return /^Q[1-4]$/.test(q)?q:null;}
@@ -730,21 +733,19 @@ async function handleSession(session, eventName = '') {
     activeUserId = null;
     currentUserRole = 'user';
     setAuthMode('login');
-    if (inviteCallback || authQueryParams.get('type') === 'invite' || authHashParams.get('type') === 'invite') {
-      document.getElementById('authMessage').textContent = 'Deze uitnodigingslink is ongeldig of verlopen. Vraag een nieuwe uitnodiging aan.';
+    if (authCallbackPending) {
+      document.getElementById('authMessage').textContent = 'Deze link is ongeldig of verlopen. Vraag een nieuwe uitnodiging of resetmail aan.';
     }
     return;
   }
-  if (inviteCallback || eventName === 'PASSWORD_RECOVERY' || session.user.user_metadata?.must_set_password) {
-    passwordSetupMode = inviteCallback || session.user.user_metadata?.must_set_password ? 'invite' : 'recovery';
+  const isInvite = authCallbackType === 'invite'
+    || authQueryParams.get('invite') === '1'
+    || session.user.user_metadata?.must_set_password;
+  const isRecovery = eventName === 'PASSWORD_RECOVERY' || authCallbackType === 'recovery';
+  if (authCallbackPending || isRecovery || session.user.user_metadata?.must_set_password) {
+    passwordSetupMode = isInvite && !isRecovery ? 'invite' : 'recovery';
     document.getElementById('authMessage').textContent = '';
-    if (inviteCallback) {
-      inviteCallback = false;
-      const callbackUrl = new URL(location.href);
-      callbackUrl.searchParams.delete('invite');
-      if (callbackUrl.searchParams.get('type') === 'invite') callbackUrl.searchParams.delete('type');
-      history.replaceState(history.state, '', `${callbackUrl.pathname}${callbackUrl.search}${callbackUrl.hash}`);
-    }
+    authCallbackPending = false;
     activeUserId = null;
     setAuthMode('password');
     const isInvitation = passwordSetupMode === 'invite';
@@ -765,7 +766,9 @@ async function handleSession(session, eventName = '') {
   if (activeUserId === session.user.id) return;
   const { data: profile, error } = await supabase.from('roadmap_profiles').select('role').eq('user_id', session.user.id).single();
   if (error || !profile) {
-    document.getElementById('authMessage').textContent = 'Dit account heeft geen toegang tot deze roadmap.';
+    document.getElementById('authMessage').textContent = error
+      ? `Inloggen is gelukt, maar het gebruikersprofiel kon niet worden geladen: ${error.message}`
+      : 'Inloggen is gelukt, maar dit account heeft geen profiel voor deze roadmap.';
     await supabase.auth.signOut();
     return;
   }
@@ -781,14 +784,34 @@ async function handleSession(session, eventName = '') {
   await init();
 }
 
+function processAuthSession(session, eventName) {
+  if (!session) return handleSession(null, eventName);
+  const userId = session.user.id;
+  if (sessionTransitionUserId === userId && sessionTransitionPromise) return sessionTransitionPromise;
+  sessionTransitionUserId = userId;
+  sessionTransitionPromise = handleSession(session, eventName).finally(() => {
+    if (sessionTransitionUserId === userId) {
+      sessionTransitionUserId = null;
+      sessionTransitionPromise = null;
+    }
+  });
+  return sessionTransitionPromise;
+}
+
 document.getElementById('loginForm').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.submitter;
   button.disabled = true;
   document.getElementById('authMessage').textContent = '';
   try {
-    const { error } = await supabase.auth.signInWithPassword({ email: document.getElementById('loginEmail').value.trim(), password: document.getElementById('loginPassword').value });
-    if (error) document.getElementById('authMessage').textContent = 'Inloggen mislukt. Controleer je e-mailadres en wachtwoord.';
+    const { data, error } = await supabase.auth.signInWithPassword({ email: document.getElementById('loginEmail').value.trim(), password: document.getElementById('loginPassword').value });
+    if (error) {
+      document.getElementById('authMessage').textContent = 'Inloggen mislukt. Controleer je e-mailadres en wachtwoord.';
+    } else if (data.session) {
+      await processAuthSession(data.session, 'SIGNED_IN');
+    } else {
+      document.getElementById('authMessage').textContent = 'Inloggen is niet afgerond: Supabase heeft geen actieve sessie teruggegeven.';
+    }
   } catch (error) {
     document.getElementById('authMessage').textContent = `Inloggen mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
   } finally {
@@ -876,7 +899,11 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
 document.getElementById('refreshUsersBtn').addEventListener('click', () => void loadAdminUsers());
 
 supabase.auth.onAuthStateChange((eventName, session) => {
-  setTimeout(() => void handleSession(session, eventName), 0);
+  setTimeout(() => {
+    void processAuthSession(session, eventName).catch(error => {
+      document.getElementById('authMessage').textContent = `De website kon niet worden geopend: ${error instanceof Error ? error.message : 'onbekende fout'}`;
+    });
+  }, 0);
 });
 </script>
 </body>
