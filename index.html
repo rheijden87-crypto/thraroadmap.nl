@@ -170,7 +170,7 @@ let authCallbackPending = ['code', 'token_hash', 'access_token'].some(key => aut
   || authCallbackHasError
   || ['invite', 'recovery'].includes(authCallbackType)
   || authQueryParams.get('invite') === '1';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
 const SP_MODULES_LIST_TITLE = 'thra_roadmap';
 const SP_WISHES_LIST_TITLE = 'thra_wensen';
 
@@ -200,7 +200,7 @@ function listUrl(table) {
 }
 
 async function spFetch(url, options = {}) {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await supabaseClient.auth.getSession();
   if (!session) throw new Error('Log eerst in om roadmapgegevens te gebruiken.');
   const response = await fetch(url, {
     cache: 'no-store',
@@ -741,7 +741,7 @@ async function denyAccess(message) {
   activeUserId = null;
   currentUserRole = 'user';
   state = { modules: [], wishes: [] };
-  try { await supabase.auth.signOut(); } catch (_) { /* sessie lokaal wissen is voldoende */ }
+  try { await supabaseClient.auth.signOut(); } catch (_) { /* sessie lokaal wissen is voldoende */ }
   cleanAuthUrl();
   setAuthMode('login');
   document.getElementById('authMessage').textContent = message;
@@ -870,7 +870,7 @@ document.getElementById('loginForm').addEventListener('submit', async event => {
   button.disabled = true;
   document.getElementById('authMessage').textContent = 'Bezig met inloggen...';
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email: document.getElementById('loginEmail').value.trim(), password: document.getElementById('loginPassword').value });
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email: document.getElementById('loginEmail').value.trim(), password: document.getElementById('loginPassword').value });
     if (error) {
       document.getElementById('authMessage').textContent = 'Inloggen mislukt. Controleer je e-mailadres en wachtwoord.';
     } else if (data.session) {
@@ -894,7 +894,7 @@ document.getElementById('forgotPasswordBtn').addEventListener('click', async () 
     return;
   }
   try {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}${location.pathname}` });
+    const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}${location.pathname}` });
     document.getElementById('authMessage').textContent = error ? 'De resetmail kon niet worden verstuurd.' : 'Als dit account bestaat, ontvang je een e-mail om je wachtwoord opnieuw in te stellen.';
   } catch (error) {
     document.getElementById('authMessage').textContent = `De resetmail kon niet worden verstuurd: ${error instanceof Error ? error.message : 'onbekende fout'}`;
@@ -918,12 +918,12 @@ document.getElementById('passwordSetupForm').addEventListener('submit', async ev
     ? { must_set_password: false, full_name: document.getElementById('setupName').value.trim() }
     : { must_set_password: false };
   try {
-    const { error } = await supabase.auth.updateUser({ password, data: userData });
+    const { error } = await supabaseClient.auth.updateUser({ password, data: userData });
     if (error) throw error;
     document.getElementById('passwordSetupForm').reset();
     passwordSetupMode = null;
     authCallbackPending = false;
-    await supabase.auth.signOut();   // niet automatisch inloggen: eerst via de inlogpagina
+    await supabaseClient.auth.signOut();   // niet automatisch inloggen: eerst via de inlogpagina
     cleanAuthUrl();
     setAuthMode('login');
     document.getElementById('loginEmail').value = email;
@@ -937,12 +937,12 @@ document.getElementById('passwordSetupForm').addEventListener('submit', async ev
   }
 });
 
-document.getElementById('signOutBtn').addEventListener('click', () => void supabase.auth.signOut());
+document.getElementById('signOutBtn').addEventListener('click', () => void supabaseClient.auth.signOut());
 
 async function loadAdminUsers() {
   const rows = document.getElementById('userRows');
   rows.innerHTML = '<tr><td colspan="3">Accounts laden...</td></tr>';
-  const { data, error } = await supabase.functions.invoke('roadmap-admin', { body: { action: 'list-users' } });
+  const { data, error } = await supabaseClient.functions.invoke('roadmap-admin', { body: { action: 'list-users' } });
   if (error || !data?.users) {
     rows.innerHTML = '<tr><td colspan="3">Gebruikers konden niet worden geladen.</td></tr>';
     return;
@@ -958,7 +958,7 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
   message.textContent = '';
   const email = document.getElementById('inviteEmail').value.trim().toLowerCase();
   try {
-    const { data, error } = await supabase.functions.invoke('roadmap-admin', { body: { action: 'invite-user', email } });
+    const { data, error } = await supabaseClient.functions.invoke('roadmap-admin', { body: { action: 'invite-user', email } });
     if (error || data?.error) {
       message.textContent = `Uitnodiging versturen is mislukt: ${error?.message || data?.error || 'onbekende fout'}`;
     } else {
@@ -975,7 +975,7 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
 
 document.getElementById('refreshUsersBtn').addEventListener('click', () => void loadAdminUsers());
 
-supabase.auth.onAuthStateChange((eventName, session) => {
+supabaseClient.auth.onAuthStateChange((eventName, session) => {
   setTimeout(() => {
     void processAuthSession(session, eventName).catch(error => {
       document.getElementById('authMessage').textContent = `De website kon niet worden geopend: ${error instanceof Error ? error.message : 'onbekende fout'}`;
@@ -984,7 +984,7 @@ supabase.auth.onAuthStateChange((eventName, session) => {
 });
 
 if (authTokenHash) {
-  supabase.auth.verifyOtp({ token_hash: authTokenHash, type: authCallbackType || 'invite' }).then(({ error }) => {
+  supabaseClient.auth.verifyOtp({ token_hash: authTokenHash, type: authCallbackType || 'invite' }).then(({ error }) => {
     if (error) {
       cleanAuthUrl();
       setAuthMode('login');
