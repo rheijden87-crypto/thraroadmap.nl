@@ -98,12 +98,13 @@ main{max-width:1540px;margin:auto;padding:26px clamp(14px,3vw,44px) 60px}.view{d
     <h2>Nieuwe module toevoegen</h2>
     <form id="moduleForm"><div class="form-grid">
       <div class="field"><label for="newModule">Naam module</label><input id="newModule" required maxlength="140" placeholder="Naam van de module"></div>
+      <div class="field"><label for="newTarget">Doelgroep</label><input id="newTarget" maxlength="100" placeholder="Bijv. volwassenen met NAH"></div>
       <div class="field"><label for="newDeveloper">Ontwikkeld door</label><select id="newDeveloper"><option value="" selected></option><option value="Libra">Libra</option><option value="Heliomare">Heliomare</option><option value="De Hoogstraat">De Hoogstraat</option><option value="UMCG">UMCG</option><option value="Minddistrict">Minddistrict</option><option value="THRA">THRA</option></select></div>
       <div class="field"><label for="newYear">Jaar</label><select id="newYear"><option>2026</option><option>2027</option><option>2028</option></select></div>
       <div class="field"><label for="newQuarter">Kwartaal</label><select id="newQuarter"><option>Q1</option><option>Q2</option><option>Q3</option><option>Q4</option></select></div>
     </div><div class="actions"><button class="btn btn-primary" type="submit">Module toevoegen</button></div></form>
     <div class="separator"></div><h2>Bestaande planning bewerken</h2>
-    <div class="table-wrap"><table class="edit-table"><thead><tr><th>Module</th><th>Ontwikkeld door</th><th>Jaar</th><th>Kwartaal</th><th>Actie</th></tr></thead><tbody id="editRows"></tbody></table></div>
+    <div class="table-wrap"><table class="edit-table"><thead><tr><th>Module</th><th>Doelgroep</th><th>Ontwikkeld door</th><th>Jaar</th><th>Kwartaal</th><th>Actie</th></tr></thead><tbody id="editRows"></tbody></table></div>
     <div class="actions no-print"><button class="btn btn-secondary" id="exportBtn" type="button">Gegevens exporteren</button><button class="btn btn-ghost" id="refreshBtn" type="button">Vernieuwen uit Supabase</button></div>
   </div>
 </section>
@@ -142,6 +143,7 @@ main{max-width:1540px;margin:auto;padding:26px clamp(14px,3vw,44px) 60px}.view{d
     <h2 id="editScheduleTitle">Planning aanpassen</h2>
     <p id="editScheduleModule"></p>
     <form id="editScheduleForm">
+      <div class="field"><label for="editScheduleTarget">Doelgroep</label><input id="editScheduleTarget" maxlength="100" placeholder="Bijv. volwassenen met NAH"></div>
       <div class="field"><label for="editScheduleYear">Jaar</label><select id="editScheduleYear"><option value="">Nog te plannen</option><option value="2026">2026</option><option value="2027">2027</option><option value="2028">2028</option></select></div>
       <div class="field"><label for="editScheduleQuarter">Kwartaal</label><select id="editScheduleQuarter"><option value="">Nog te plannen</option><option value="Q1">Q1</option><option value="Q2">Q2</option><option value="Q3">Q3</option><option value="Q4">Q4</option></select></div>
       <div class="modal-actions"><button class="btn btn-ghost" id="returnModuleToWish" type="button">Terug naar wensen</button><button class="btn btn-ghost" id="cancelEditSchedule" type="button">Annuleren</button><button class="btn btn-primary" type="submit">Opslaan</button></div>
@@ -335,9 +337,9 @@ function renderRoadmap() {
 }
 
 function renderRoadmapCard(module) {
-  const target = module.target.trim() || 'Niet ingevuld in Supabase';
+  const target = module.target.trim() || 'Niet ingevuld';
   const adminAttributes = currentUserRole === 'admin' ? `class="card roadmap-card" role="button" tabindex="0" data-module-id="${esc(module.id)}" aria-label="Planning van ${esc(module.name)} aanpassen. Doelgroep: ${esc(target)}"` : 'class="card"';
-  return `<article ${adminAttributes} title="Doelgroep: ${esc(target)}" style="border-left-color:${developerColours[module.developer] || '#647789'}"><div class="card-title">${esc(module.name)}</div><div class="card-owner">Ontwikkeld door: ${esc(module.developer || 'Niet ingevuld')}</div></article>`;
+  return `<article ${adminAttributes} title="Doelgroep: ${esc(target)}" style="border-left-color:${developerColours[module.developer] || '#647789'}"><div class="card-title">${esc(module.name)}</div><div class="card-owner">Ontwikkeld door: ${esc(module.developer || 'Niet ingevuld')}</div><div class="card-owner">Doelgroep: ${esc(target)}</div></article>`;
 }
 
 function renderWishes() {
@@ -374,7 +376,7 @@ async function updateWishPriority(id, developer, checked) {
 
 function renderEdit() {
   const modules = [...state.modules].sort((a, b) => a.year - b.year || a.quarter.localeCompare(b.quarter) || a.name.localeCompare(b.name, 'nl'));
-  document.getElementById('editRows').innerHTML = modules.map(module => `<tr><td><input aria-label="Modulenaam" value="${esc(module.name)}" data-id="${esc(module.id)}" data-key="name"></td><td><select aria-label="Ontwikkeld door" data-id="${esc(module.id)}" data-key="developer">${developerOptions.map(developer => `<option value="${esc(developer)}" ${module.developer === developer ? 'selected' : ''}>${esc(developer)}</option>`).join('')}</select></td><td><select aria-label="Jaar" data-id="${esc(module.id)}" data-key="year">${[2026, 2027, 2028].map(year => `<option value="${year}" ${module.year === year ? 'selected' : ''}>${year}</option>`).join('')}</select></td><td><select aria-label="Kwartaal" data-id="${esc(module.id)}" data-key="quarter">${['Q1', 'Q2', 'Q3', 'Q4'].map(quarter => `<option value="${quarter}" ${module.quarter === quarter ? 'selected' : ''}>${quarter}</option>`).join('')}</select></td><td><button class="icon-btn" data-delete-module="${esc(module.id)}">Verwijderen</button></td></tr>`).join('');
+  document.getElementById('editRows').innerHTML = modules.map(module => `<tr><td><input aria-label="Modulenaam" value="${esc(module.name)}" data-id="${esc(module.id)}" data-key="name"></td><td><input aria-label="Doelgroep" maxlength="100" value="${esc(module.target)}" data-id="${esc(module.id)}" data-key="target"></td><td><select aria-label="Ontwikkeld door" data-id="${esc(module.id)}" data-key="developer">${developerOptions.map(developer => `<option value="${esc(developer)}" ${module.developer === developer ? 'selected' : ''}>${esc(developer)}</option>`).join('')}</select></td><td><select aria-label="Jaar" data-id="${esc(module.id)}" data-key="year">${[2026, 2027, 2028].map(year => `<option value="${year}" ${module.year === year ? 'selected' : ''}>${year}</option>`).join('')}</select></td><td><select aria-label="Kwartaal" data-id="${esc(module.id)}" data-key="quarter">${['Q1', 'Q2', 'Q3', 'Q4'].map(quarter => `<option value="${quarter}" ${module.quarter === quarter ? 'selected' : ''}>${quarter}</option>`).join('')}</select></td><td><button class="icon-btn" data-delete-module="${esc(module.id)}">Verwijderen</button></td></tr>`).join('');
   document.querySelectorAll('#editRows [data-key]').forEach(input => input.addEventListener('change', () => void updateModule(input.dataset.id, input.dataset.key, input.value)));
   document.querySelectorAll('[data-delete-module]').forEach(button => button.addEventListener('click', () => void deleteModule(button.dataset.deleteModule)));
 }
@@ -424,11 +426,12 @@ function openScheduleEditor(id) {
   if (!module) return;
   editingScheduleModuleId = id;
   document.getElementById('editScheduleModule').textContent = module.name;
+  document.getElementById('editScheduleTarget').value = module.target;
   document.getElementById('editScheduleYear').value = module.year ?? '';
   document.getElementById('editScheduleQuarter').value = module.quarter ?? '';
   document.getElementById('editScheduleModal').classList.add('open');
   document.getElementById('editScheduleModal').setAttribute('aria-hidden', 'false');
-  document.getElementById('editScheduleYear').focus();
+  document.getElementById('editScheduleTarget').focus();
 }
 
 document.getElementById('closeEditSchedule').addEventListener('click', closeScheduleEditor);
@@ -451,7 +454,8 @@ document.getElementById('editScheduleForm').addEventListener('submit', async eve
     toast('Kies zowel een jaar als een kwartaal, of laat beide leeg om nog niet te plannen.');
     return;
   }
-  const previous = { year: module.year, quarter: module.quarter };
+  const previous = { target: module.target, year: module.year, quarter: module.quarter };
+  module.target = document.getElementById('editScheduleTarget').value.trim();
   module.year = yearValue ? Number(yearValue) : null;
   module.quarter = quarterValue || null;
   const button = event.submitter || event.target.querySelector('button[type="submit"]');
@@ -465,6 +469,7 @@ document.getElementById('editScheduleForm').addEventListener('submit', async eve
   } catch (error) {
     Object.assign(module, previous);
     renderAll();
+    document.getElementById('editScheduleTarget').value = module.target;
     document.getElementById('editScheduleYear').value = module.year ?? '';
     document.getElementById('editScheduleQuarter').value = module.quarter ?? '';
     toast(`Planning niet opgeslagen: ${error instanceof Error ? error.message : 'onbekende fout'}`);
@@ -627,7 +632,7 @@ document.getElementById('roadmap').addEventListener('keydown', event => {
 });
 document.getElementById('moduleForm').addEventListener('submit', async event => {
   event.preventDefault();
-  const module = { id: uid('m'), name: document.getElementById('newModule').value.trim(), year: Number(document.getElementById('newYear').value), quarter: document.getElementById('newQuarter').value, developer: document.getElementById('newDeveloper').value, target: '' };
+  const module = { id: uid('m'), name: document.getElementById('newModule').value.trim(), year: Number(document.getElementById('newYear').value), quarter: document.getElementById('newQuarter').value, developer: document.getElementById('newDeveloper').value, target: document.getElementById('newTarget').value.trim() };
   if (!module.developer) return toast('Kies eerst een ontwikkelaar.');
   const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
