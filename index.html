@@ -144,8 +144,10 @@ main{max-width:1540px;margin:auto;padding:26px clamp(14px,3vw,44px) 60px}.view{d
     <p id="editScheduleModule"></p>
     <form id="editScheduleForm">
       <div class="field"><label for="editScheduleTarget">Doelgroep</label><input id="editScheduleTarget" maxlength="100" placeholder="Bijv. volwassenen met NAH"></div>
-      <div class="field"><label for="editScheduleYear">Jaar</label><select id="editScheduleYear"><option value="">Nog te plannen</option><option value="2026">2026</option><option value="2027">2027</option><option value="2028">2028</option></select></div>
-      <div class="field"><label for="editScheduleQuarter">Kwartaal</label><select id="editScheduleQuarter"><option value="">Nog te plannen</option><option value="Q1">Q1</option><option value="Q2">Q2</option><option value="Q3">Q3</option><option value="Q4">Q4</option></select></div>
+      <div id="editSchedulePlanningFields">
+        <div class="field"><label for="editScheduleYear">Jaar</label><select id="editScheduleYear"><option value="">Nog te plannen</option><option value="2026">2026</option><option value="2027">2027</option><option value="2028">2028</option></select></div>
+        <div class="field"><label for="editScheduleQuarter">Kwartaal</label><select id="editScheduleQuarter"><option value="">Nog te plannen</option><option value="Q1">Q1</option><option value="Q2">Q2</option><option value="Q3">Q3</option><option value="Q4">Q4</option></select></div>
+      </div>
       <div class="modal-actions"><button class="btn btn-ghost" id="returnModuleToWish" type="button">Terug naar wensen</button><button class="btn btn-ghost" id="cancelEditSchedule" type="button">Annuleren</button><button class="btn btn-primary" type="submit">Opslaan</button></div>
     </form>
   </div>
@@ -339,9 +341,8 @@ function renderRoadmap() {
 function renderRoadmapCard(module) {
   const target = module.target.trim() || 'Niet ingevuld';
   const developer = module.developer || 'Niet ingevuld';
-  const details = `Doelgroep: ${target} · Ontwikkeld door: ${developer}`;
-  const adminAttributes = currentUserRole === 'admin' ? `class="card roadmap-card" role="button" tabindex="0" data-module-id="${esc(module.id)}" aria-label="Planning van ${esc(module.name)} aanpassen. ${esc(details)}"` : 'class="card"';
-  return `<article ${adminAttributes} title="${esc(details)}" style="border-left-color:${developerColours[module.developer] || '#647789'}"><div class="card-title">${esc(module.name)}</div></article>`;
+  const details = `Doelgroep: ${target}; Ontwikkeld door: ${developer}`;
+  return `<article class="card roadmap-card" role="button" tabindex="0" data-module-id="${esc(module.id)}" aria-label="Module ${esc(module.name)} aanpassen. ${esc(details)}" title="Doelgroep: ${esc(target)}&#10;Ontwikkeld door: ${esc(developer)}" style="border-left-color:${developerColours[module.developer] || '#647789'}"><div class="card-title">${esc(module.name)}</div></article>`;
 }
 
 function renderWishes() {
@@ -431,6 +432,10 @@ function openScheduleEditor(id) {
   document.getElementById('editScheduleTarget').value = module.target;
   document.getElementById('editScheduleYear').value = module.year ?? '';
   document.getElementById('editScheduleQuarter').value = module.quarter ?? '';
+  const canEditPlanning = currentUserRole === 'admin';
+  document.getElementById('editSchedulePlanningFields').hidden = !canEditPlanning;
+  document.getElementById('returnModuleToWish').hidden = !canEditPlanning;
+  document.getElementById('editScheduleTitle').textContent = canEditPlanning ? 'Planning aanpassen' : 'Doelgroep aanpassen';
   document.getElementById('editScheduleModal').classList.add('open');
   document.getElementById('editScheduleModal').setAttribute('aria-hidden', 'false');
   document.getElementById('editScheduleTarget').focus();
@@ -450,16 +455,19 @@ document.getElementById('editScheduleForm').addEventListener('submit', async eve
   event.preventDefault();
   const module = state.modules.find(item => item.id === editingScheduleModuleId);
   if (!module) return closeScheduleEditor();
+  const canEditPlanning = currentUserRole === 'admin';
   const yearValue = document.getElementById('editScheduleYear').value;
   const quarterValue = document.getElementById('editScheduleQuarter').value;
-  if (Boolean(yearValue) !== Boolean(quarterValue)) {
+  if (canEditPlanning && Boolean(yearValue) !== Boolean(quarterValue)) {
     toast('Kies zowel een jaar als een kwartaal, of laat beide leeg om nog niet te plannen.');
     return;
   }
   const previous = { target: module.target, year: module.year, quarter: module.quarter };
   module.target = document.getElementById('editScheduleTarget').value.trim();
-  module.year = yearValue ? Number(yearValue) : null;
-  module.quarter = quarterValue || null;
+  if (canEditPlanning) {
+    module.year = yearValue ? Number(yearValue) : null;
+    module.quarter = quarterValue || null;
+  }
   const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   renderAll();
@@ -620,12 +628,10 @@ document.getElementById('moveWishForm').addEventListener('submit', async event =
 
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => showView(button.dataset.view)));
 document.getElementById('roadmap').addEventListener('click', event => {
-  if (currentUserRole !== 'admin') return;
   const card = event.target.closest('[data-module-id]');
   if (card) openScheduleEditor(card.dataset.moduleId);
 });
 document.getElementById('roadmap').addEventListener('keydown', event => {
-  if (currentUserRole !== 'admin') return;
   if (!['Enter', ' '].includes(event.key)) return;
   const card = event.target.closest('[data-module-id]');
   if (!card) return;
