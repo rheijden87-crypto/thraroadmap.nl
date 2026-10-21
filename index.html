@@ -112,11 +112,14 @@ main{max-width:1540px;margin:auto;padding:26px clamp(14px,3vw,44px) 60px}.view{d
   <div class="panel">
     <h2>Gebruiker uitnodigen</h2>
     <form id="inviteUserForm"><div class="form-grid"><div class="field"><label for="inviteEmail">E-mailadres</label><input id="inviteEmail" type="email" autocomplete="email" required></div></div><div class="actions"><button class="btn btn-primary" type="submit">Uitnodiging versturen</button><span id="inviteMessage" role="status" aria-live="polite"></span></div></form>
-    <div class="separator"></div><div class="actions"><h2>Accounts</h2><button class="btn btn-ghost" id="refreshUsersBtn" type="button">Vernieuwen</button></div>
-    <div class="table-wrap admin-users"><table><thead><tr><th>E-mailadres</th><th>Rol</th><th>Aangemaakt</th></tr></thead><tbody id="userRows"></tbody></table></div>
-    <div class="separator"></div><div class="actions"><h2>Toegangsrechten (roadmap_profiles)</h2><span class="count" id="profileCount"></span></div>
-    <p class="hint">Rechtstreeks uit de Supabase-tabel <code>roadmap_profiles</code>: alleen accounts met rol Beheerder of Gebruiker mogen inloggen.</p>
-    <div class="table-wrap admin-users"><table><thead><tr><th>E-mailadres</th><th>Rol</th><th>Gebruikers-ID</th><th>Aangemaakt</th></tr></thead><tbody id="profileRows"></tbody></table></div>
+    <div class="separator"></div>
+    <h2>Account aanmaken</h2>
+    <p class="hint">Maak direct een account aan met een e-mailadres (de inlognaam) en een wachtwoord. Geef deze gegevens zelf door aan de gebruiker.</p>
+    <form id="createUserForm"><div class="form-grid"><div class="field"><label for="createEmail">E-mailadres (inlognaam)</label><input id="createEmail" type="email" autocomplete="off" required></div><div class="field"><label for="createPassword">Wachtwoord (minimaal 12 tekens)</label><input id="createPassword" type="password" autocomplete="new-password" minlength="12" required></div><div class="field"><label for="createRole">Rol</label><select id="createRole"><option value="user" selected>Gebruiker</option><option value="admin">Beheerder</option></select></div></div><div class="actions"><button class="btn btn-primary" type="submit">Account aanmaken</button><label><input type="checkbox" id="showCreatePassword"> Toon wachtwoord</label><span id="createUserMessage" role="status" aria-live="polite"></span></div></form>
+    <div class="separator"></div><div class="actions"><h2>Toegangsrechten (roadmap_profiles)</h2><span class="count" id="profileCount"></span><button class="btn btn-ghost" id="refreshUsersBtn" type="button">Vernieuwen</button></div>
+    <p class="hint">Rechtstreeks uit de Supabase-tabel <code>roadmap_profiles</code>. Kies een andere rol om die direct in Supabase op te slaan. Je eigen rol kun je niet wijzigen.</p>
+    <p class="auth-message" id="profileMessage" role="status" aria-live="polite"></p>
+    <div class="table-wrap admin-users"><table><thead><tr><th>E-mailadres</th><th>Rol</th><th>Gebruikers-ID</th><th>Aangemaakt</th><th>Actie</th></tr></thead><tbody id="profileRows"></tbody></table></div>
   </div>
 </section>
 </main>
@@ -387,7 +390,7 @@ function showView(name) {
   location.hash = name === 'roadmap' ? '' : name;
   if (name === 'wishes') renderWishes();
   if (name === 'edit') renderEdit();
-  if (name === 'admin') { void loadAdminUsers(); void loadProfiles(); }
+  if (name === 'admin') void loadProfiles();
 }
 
 async function updateModule(id, key, value) {
@@ -942,35 +945,131 @@ document.getElementById('passwordSetupForm').addEventListener('submit', async ev
 
 document.getElementById('signOutBtn').addEventListener('click', () => void supabaseClient.auth.signOut());
 
-async function loadAdminUsers() {
-  const rows = document.getElementById('userRows');
-  rows.innerHTML = '<tr><td colspan="3">Accounts laden...</td></tr>';
-  const { data, error } = await supabaseClient.functions.invoke('roadmap-admin', { body: { action: 'list-users' } });
-  if (error || !data?.users) {
-    rows.innerHTML = '<tr><td colspan="3">Gebruikers konden niet worden geladen.</td></tr>';
-    return;
-  }
-  rows.innerHTML = data.users.length ? data.users.map(user => `<tr><td>${esc(user.email)}</td><td>${esc(user.role === 'admin' ? 'Beheerder' : 'Gebruiker')}</td><td>${esc(new Date(user.created_at).toLocaleDateString('nl-NL'))}</td></tr>`).join('') : '<tr><td colspan="3">Geen accounts gevonden.</td></tr>';
+const PROFILE_ROLES = [['admin', 'Beheerder'], ['user', 'Gebruiker']];
+let profileCache = [];
+
+function renderProfiles() {
+  const rows = document.getElementById('profileRows');
+  const formatDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString('nl-NL') : '';
+  rows.innerHTML = profileCache.length ? profileCache.map(profile => {
+    const own = profile.user_id === activeUserId;
+    const known = PROFILE_ROLES.some(([value]) => value === profile.role);
+    const options = (known ? PROFILE_ROLES : [[profile.role || '', `${profile.role || 'Onbekend'} (geen toegang)`], ...PROFILE_ROLES])
+      .map(([value, label]) => `<option value="${esc(value)}" ${value === profile.role ? 'selected' : ''}>${esc(label)}</option>`).join('');
+    return `<tr><td>${esc(profile.email || '')}${own ? ' <em>(jij)</em>' : ''}</td><td><select class="profile-role" data-user-id="${esc(profile.user_id)}" aria-label="Rol van ${esc(profile.email || profile.user_id)}" ${own ? 'disabled title="Je kunt je eigen rol niet wijzigen"' : ''}>${options}</select></td><td><code>${esc(profile.user_id)}</code></td><td>${esc(formatDate(profile.created_at))}</td><td>${own ? '' : `<button class="icon-btn" type="button" data-delete-user="${esc(profile.user_id)}">Verwijderen</button>`}</td></tr>`;
+  }).join('') : '<tr><td colspan="5">Geen profielen gevonden.</td></tr>';
+  document.getElementById('profileCount').textContent = `${profileCache.length} profiel${profileCache.length === 1 ? '' : 'en'}`;
+  rows.querySelectorAll('select.profile-role').forEach(select => select.addEventListener('change', () => void changeProfileRole(select)));
+  rows.querySelectorAll('[data-delete-user]').forEach(button => button.addEventListener('click', () => void deleteUserAccount(button)));
 }
 
 async function loadProfiles() {
   const rows = document.getElementById('profileRows');
-  const count = document.getElementById('profileCount');
-  rows.innerHTML = '<tr><td colspan="4">Rechten laden...</td></tr>';
-  count.textContent = '';
+  rows.innerHTML = '<tr><td colspan="5">Rechten laden...</td></tr>';
+  document.getElementById('profileCount').textContent = '';
   try {
     const params = new URLSearchParams({ select: 'user_id,email,role,created_at', order: 'created_at.asc', limit: '1000' });
-    const profiles = await spFetch(`${listUrl('roadmap_profiles')}?${params}`);
-    const roleLabel = role => role === 'admin' ? 'Beheerder' : role === 'user' ? 'Gebruiker' : `${role || 'Onbekend'} (geen toegang)`;
-    const formatDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString('nl-NL') : '';
-    rows.innerHTML = profiles.length
-      ? profiles.map(profile => `<tr><td>${esc(profile.email || '')}</td><td>${esc(roleLabel(profile.role))}</td><td><code>${esc(profile.user_id)}</code></td><td>${esc(formatDate(profile.created_at))}</td></tr>`).join('')
-      : '<tr><td colspan="4">Geen profielen gevonden.</td></tr>';
-    count.textContent = `${profiles.length} profiel${profiles.length === 1 ? '' : 'en'}`;
+    profileCache = await spFetch(`${listUrl('roadmap_profiles')}?${params}`);
+    renderProfiles();
   } catch (error) {
-    rows.innerHTML = `<tr><td colspan="4">Profielen konden niet worden geladen: ${esc(error instanceof Error ? error.message : 'onbekende fout')}</td></tr>`;
+    rows.innerHTML = `<tr><td colspan="5">Profielen konden niet worden geladen: ${esc(error instanceof Error ? error.message : 'onbekende fout')}</td></tr>`;
   }
 }
+
+async function changeProfileRole(select) {
+  const profile = profileCache.find(item => item.user_id === select.dataset.userId);
+  const message = document.getElementById('profileMessage');
+  if (!profile) return;
+  const newRole = select.value;
+  const roleLabel = (PROFILE_ROLES.find(([value]) => value === newRole) || [, newRole])[1];
+  if (!confirm(`De rol van ${profile.email || profile.user_id} wijzigen naar ${roleLabel}?`)) {
+    select.value = profile.role;
+    return;
+  }
+  select.disabled = true;
+  message.textContent = 'Rol opslaan...';
+  try {
+    const updated = await spFetch(`${listUrl('roadmap_profiles')}?user_id=eq.${encodeURIComponent(profile.user_id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
+      body: JSON.stringify({ role: newRole })
+    });
+    // Zonder rij terug is de wijziging door de rechten in Supabase geweigerd.
+    if (!Array.isArray(updated) || !updated.length) throw new Error('Supabase heeft de wijziging niet doorgevoerd (geen rechten).');
+    profile.role = updated[0].role;
+    message.textContent = `Rol van ${profile.email || profile.user_id} is nu ${roleLabel}.`;
+    toast('Rol opgeslagen in Supabase');
+  } catch (error) {
+    select.value = profile.role;
+    message.textContent = `Rol wijzigen mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
+  } finally {
+    select.disabled = profile.user_id === activeUserId;
+  }
+}
+
+async function functionErrorMessage(error, data) {
+  if (data?.error) return data.error;
+  try {
+    const body = await error.context.json();
+    if (body?.error) return body.error;
+  } catch (_) { /* geen leesbare foutmelding van de server */ }
+  return error?.message || 'onbekende fout';
+}
+
+async function deleteUserAccount(button) {
+  const profile = profileCache.find(item => item.user_id === button.dataset.deleteUser);
+  const message = document.getElementById('profileMessage');
+  if (!profile) return;
+  if (profile.user_id === activeUserId) {
+    message.textContent = 'Je kunt je eigen account niet verwijderen.';
+    return;
+  }
+  if (!confirm(`Het account van ${profile.email || profile.user_id} definitief verwijderen? Deze persoon kan daarna niet meer inloggen.`)) return;
+  button.disabled = true;
+  message.textContent = 'Account verwijderen...';
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('roadmap-admin', { body: { action: 'delete-user', user_id: profile.user_id } });
+    if (error || data?.error) throw new Error(await functionErrorMessage(error, data));
+    profileCache = profileCache.filter(item => item.user_id !== profile.user_id);
+    renderProfiles();
+    message.textContent = `Account van ${profile.email || profile.user_id} is verwijderd.`;
+    toast('Account verwijderd uit Supabase');
+  } catch (error) {
+    button.disabled = false;
+    message.textContent = `Account verwijderen mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
+  }
+}
+
+document.getElementById('showCreatePassword').addEventListener('change', event => {
+  document.getElementById('createPassword').type = event.target.checked ? 'text' : 'password';
+});
+
+document.getElementById('createUserForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
+  const message = document.getElementById('createUserMessage');
+  const email = document.getElementById('createEmail').value.trim().toLowerCase();
+  const password = document.getElementById('createPassword').value;
+  const role = document.getElementById('createRole').value;
+  if (password.length < 12) {
+    message.textContent = 'Het wachtwoord moet minimaal 12 tekens bevatten.';
+    return;
+  }
+  button.disabled = true;
+  message.textContent = 'Account aanmaken...';
+  try {
+    const { data, error } = await supabaseClient.functions.invoke('roadmap-admin', { body: { action: 'create-user', email, password, role } });
+    if (error || data?.error) throw new Error(await functionErrorMessage(error, data));
+    message.textContent = `Account voor ${email} is aangemaakt. De gebruiker kan nu inloggen.`;
+    event.target.reset();
+    document.getElementById('createPassword').type = 'password';
+    await loadProfiles();
+  } catch (error) {
+    message.textContent = `Account aanmaken mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 document.getElementById('inviteUserForm').addEventListener('submit', async event => {
   event.preventDefault();
@@ -986,7 +1085,6 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
     } else {
       message.textContent = 'Uitnodiging verstuurd. De link opent direct het scherm om het account af te ronden.';
       event.target.reset();
-      await loadAdminUsers();
       await loadProfiles();
     }
   } catch (error) {
@@ -996,7 +1094,7 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
   }
 });
 
-document.getElementById('refreshUsersBtn').addEventListener('click', () => { void loadAdminUsers(); void loadProfiles(); });
+document.getElementById('refreshUsersBtn').addEventListener('click', () => void loadProfiles());
 
 supabaseClient.auth.onAuthStateChange((eventName, session) => {
   setTimeout(() => {
