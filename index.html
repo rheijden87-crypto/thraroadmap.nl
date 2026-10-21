@@ -447,7 +447,7 @@ document.getElementById('editScheduleForm').addEventListener('submit', async eve
   const previous = { year: module.year, quarter: module.quarter };
   module.year = yearValue ? Number(yearValue) : null;
   module.quarter = quarterValue || null;
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   renderAll();
   try {
@@ -496,7 +496,7 @@ document.getElementById('returnWishForm').addEventListener('submit', async event
   if (!module) return closeReturnWishEditor();
   const centre = document.getElementById('returnWishCentre').value.trim();
   if (!centre) return toast('Vul eerst het centrum in.');
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   let createdWishId = null;
   try {
@@ -589,7 +589,7 @@ document.getElementById('moveWishForm').addEventListener('submit', async event =
   }
   const year = yearValue ? Number(yearValue) : null;
   const quarter = quarterValue || null;
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
     await addItem(SP_MODULES_LIST_TITLE, modulePayload({ id: uid('m'), name: wish.module, year, quarter, developer, target: wish.target }));
@@ -622,7 +622,7 @@ document.getElementById('moduleForm').addEventListener('submit', async event => 
   event.preventDefault();
   const module = { id: uid('m'), name: document.getElementById('newModule').value.trim(), year: Number(document.getElementById('newYear').value), quarter: document.getElementById('newQuarter').value, developer: document.getElementById('newDeveloper').value, target: '' };
   if (!module.developer) return toast('Kies eerst een ontwikkelaar.');
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
     await addItem(SP_MODULES_LIST_TITLE, modulePayload(module));
@@ -639,7 +639,7 @@ document.getElementById('moduleForm').addEventListener('submit', async event => 
 document.getElementById('wishForm').addEventListener('submit', async event => {
   event.preventDefault();
   const wish = { id: uid('w'), module: document.getElementById('wishModule').value.trim(), target: document.getElementById('wishTarget').value.trim(), centre: document.getElementById('wishCentre').value.trim(), date: getTodayDmy() };
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   try {
     await addItem(SP_WISHES_LIST_TITLE, wishPayload(wish));
@@ -748,11 +748,29 @@ async function denyAccess(message) {
 }
 
 // Controleert in Supabase (tabel roadmap_profiles) of dit account mag inloggen.
-async function lookupAccess(userId) {
-  const { data, error } = await supabase.from('roadmap_profiles').select('role').eq('user_id', userId).maybeSingle();
-  if (error) return { ok: false, reason: 'error', detail: error.message };
-  if (!data || !ALLOWED_ROLES.includes(data.role)) return { ok: false, reason: 'no-access' };
-  return { ok: true, role: data.role };
+async function lookupAccess(session) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const params = new URLSearchParams({ select: 'role', user_id: `eq.${session.user.id}` });
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/roadmap_profiles?${params}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${session.access_token}`, Accept: 'application/json' }
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      return { ok: false, reason: 'error', detail: `${response.status} ${detail.slice(0, 200)}` };
+    }
+    const rows = await response.json();
+    const profile = Array.isArray(rows) ? rows[0] : null;
+    if (!profile || !ALLOWED_ROLES.includes(profile.role)) return { ok: false, reason: 'no-access' };
+    return { ok: true, role: profile.role };
+  } catch (error) {
+    return { ok: false, reason: 'error', detail: error.name === 'AbortError' ? 'time-out bij het ophalen van je rechten' : error.message };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function showPasswordSetup(session, isInvitation) {
@@ -802,7 +820,7 @@ async function handleSession(session, eventName = '') {
   if (activeUserId === session.user.id) return;
 
   // 2. Rechten controleren in Supabase voordat het dashboard wordt getoond
-  const access = await lookupAccess(session.user.id);
+  const access = await lookupAccess(session);
   if (!access.ok) {
     await denyAccess(access.reason === 'error'
       ? `Je rechten konden niet worden gecontroleerd: ${access.detail}`
@@ -833,7 +851,11 @@ function processAuthSession(session, eventName) {
   const userId = session.user.id;
   if (sessionTransitionUserId === userId && sessionTransitionPromise) return sessionTransitionPromise;
   sessionTransitionUserId = userId;
-  sessionTransitionPromise = handleSession(session, eventName).finally(() => {
+  const guarded = Promise.race([
+    handleSession(session, eventName),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('het openen van het dashboard duurde te lang')), 20000))
+  ]);
+  sessionTransitionPromise = guarded.finally(() => {
     if (sessionTransitionUserId === userId) {
       sessionTransitionUserId = null;
       sessionTransitionPromise = null;
@@ -844,19 +866,21 @@ function processAuthSession(session, eventName) {
 
 document.getElementById('loginForm').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
-  document.getElementById('authMessage').textContent = '';
+  document.getElementById('authMessage').textContent = 'Bezig met inloggen...';
   try {
     const { data, error } = await supabase.auth.signInWithPassword({ email: document.getElementById('loginEmail').value.trim(), password: document.getElementById('loginPassword').value });
     if (error) {
       document.getElementById('authMessage').textContent = 'Inloggen mislukt. Controleer je e-mailadres en wachtwoord.';
     } else if (data.session) {
       await processAuthSession(data.session, 'SIGNED_IN');
+      if (document.getElementById('authMessage').textContent === 'Bezig met inloggen...') document.getElementById('authMessage').textContent = '';
     } else {
       document.getElementById('authMessage').textContent = 'Inloggen is niet afgerond: Supabase heeft geen actieve sessie teruggegeven.';
     }
   } catch (error) {
+    console.error('Inloggen mislukt', error);
     document.getElementById('authMessage').textContent = `Inloggen mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
   } finally {
     button.disabled = false;
@@ -879,7 +903,7 @@ document.getElementById('forgotPasswordBtn').addEventListener('click', async () 
 
 document.getElementById('passwordSetupForm').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   const isInvitation = !document.getElementById('setupNameField').hidden;
   const password = document.getElementById('newPassword').value;
   const message = document.getElementById('passwordMessage');
@@ -928,7 +952,7 @@ async function loadAdminUsers() {
 
 document.getElementById('inviteUserForm').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = event.submitter;
+  const button = event.submitter || event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   const message = document.getElementById('inviteMessage');
   message.textContent = '';
