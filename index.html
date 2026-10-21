@@ -114,6 +114,9 @@ main{max-width:1540px;margin:auto;padding:26px clamp(14px,3vw,44px) 60px}.view{d
     <form id="inviteUserForm"><div class="form-grid"><div class="field"><label for="inviteEmail">E-mailadres</label><input id="inviteEmail" type="email" autocomplete="email" required></div></div><div class="actions"><button class="btn btn-primary" type="submit">Uitnodiging versturen</button><span id="inviteMessage" role="status" aria-live="polite"></span></div></form>
     <div class="separator"></div><div class="actions"><h2>Accounts</h2><button class="btn btn-ghost" id="refreshUsersBtn" type="button">Vernieuwen</button></div>
     <div class="table-wrap admin-users"><table><thead><tr><th>E-mailadres</th><th>Rol</th><th>Aangemaakt</th></tr></thead><tbody id="userRows"></tbody></table></div>
+    <div class="separator"></div><div class="actions"><h2>Toegangsrechten (roadmap_profiles)</h2><span class="count" id="profileCount"></span></div>
+    <p class="hint">Rechtstreeks uit de Supabase-tabel <code>roadmap_profiles</code>: alleen accounts met rol Beheerder of Gebruiker mogen inloggen.</p>
+    <div class="table-wrap admin-users"><table><thead><tr><th>E-mailadres</th><th>Rol</th><th>Gebruikers-ID</th><th>Aangemaakt</th></tr></thead><tbody id="profileRows"></tbody></table></div>
   </div>
 </section>
 </main>
@@ -384,7 +387,7 @@ function showView(name) {
   location.hash = name === 'roadmap' ? '' : name;
   if (name === 'wishes') renderWishes();
   if (name === 'edit') renderEdit();
-  if (name === 'admin') void loadAdminUsers();
+  if (name === 'admin') { void loadAdminUsers(); void loadProfiles(); }
 }
 
 async function updateModule(id, key, value) {
@@ -950,6 +953,25 @@ async function loadAdminUsers() {
   rows.innerHTML = data.users.length ? data.users.map(user => `<tr><td>${esc(user.email)}</td><td>${esc(user.role === 'admin' ? 'Beheerder' : 'Gebruiker')}</td><td>${esc(new Date(user.created_at).toLocaleDateString('nl-NL'))}</td></tr>`).join('') : '<tr><td colspan="3">Geen accounts gevonden.</td></tr>';
 }
 
+async function loadProfiles() {
+  const rows = document.getElementById('profileRows');
+  const count = document.getElementById('profileCount');
+  rows.innerHTML = '<tr><td colspan="4">Rechten laden...</td></tr>';
+  count.textContent = '';
+  try {
+    const params = new URLSearchParams({ select: 'user_id,email,role,created_at', order: 'created_at.asc', limit: '1000' });
+    const profiles = await spFetch(`${listUrl('roadmap_profiles')}?${params}`);
+    const roleLabel = role => role === 'admin' ? 'Beheerder' : role === 'user' ? 'Gebruiker' : `${role || 'Onbekend'} (geen toegang)`;
+    const formatDate = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleDateString('nl-NL') : '';
+    rows.innerHTML = profiles.length
+      ? profiles.map(profile => `<tr><td>${esc(profile.email || '')}</td><td>${esc(roleLabel(profile.role))}</td><td><code>${esc(profile.user_id)}</code></td><td>${esc(formatDate(profile.created_at))}</td></tr>`).join('')
+      : '<tr><td colspan="4">Geen profielen gevonden.</td></tr>';
+    count.textContent = `${profiles.length} profiel${profiles.length === 1 ? '' : 'en'}`;
+  } catch (error) {
+    rows.innerHTML = `<tr><td colspan="4">Profielen konden niet worden geladen: ${esc(error instanceof Error ? error.message : 'onbekende fout')}</td></tr>`;
+  }
+}
+
 document.getElementById('inviteUserForm').addEventListener('submit', async event => {
   event.preventDefault();
   const button = event.submitter || event.target.querySelector('button[type="submit"]');
@@ -965,6 +987,7 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
       message.textContent = 'Uitnodiging verstuurd. De link opent direct het scherm om het account af te ronden.';
       event.target.reset();
       await loadAdminUsers();
+      await loadProfiles();
     }
   } catch (error) {
     message.textContent = `Uitnodiging versturen is mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
@@ -973,7 +996,7 @@ document.getElementById('inviteUserForm').addEventListener('submit', async event
   }
 });
 
-document.getElementById('refreshUsersBtn').addEventListener('click', () => void loadAdminUsers());
+document.getElementById('refreshUsersBtn').addEventListener('click', () => { void loadAdminUsers(); void loadProfiles(); });
 
 supabaseClient.auth.onAuthStateChange((eventName, session) => {
   setTimeout(() => {
