@@ -164,7 +164,10 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_0qP8iv4EU2uHwwgRkHN0lw_lBY-YHpw
 const authQueryParams = new URLSearchParams(location.search);
 const authHashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
 const authCallbackType = authQueryParams.get('type') || authHashParams.get('type') || '';
+const authTokenHash = authQueryParams.get('token_hash') || '';
+const authCallbackHasError = authQueryParams.has('error_description') || authHashParams.has('error_description');
 let authCallbackPending = ['code', 'token_hash', 'access_token'].some(key => authQueryParams.has(key) || authHashParams.has(key))
+  || authCallbackHasError
   || ['invite', 'recovery'].includes(authCallbackType)
   || authQueryParams.get('invite') === '1';
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
@@ -728,62 +731,101 @@ function setAuthMode(mode) {
   document.getElementById('passwordSetupForm').hidden = mode !== 'password';
 }
 
+const ALLOWED_ROLES = ['admin', 'user'];
+
+function cleanAuthUrl() {
+  history.replaceState(null, '', location.pathname);
+}
+
+async function denyAccess(message) {
+  activeUserId = null;
+  currentUserRole = 'user';
+  state = { modules: [], wishes: [] };
+  try { await supabase.auth.signOut(); } catch (_) { /* sessie lokaal wissen is voldoende */ }
+  cleanAuthUrl();
+  setAuthMode('login');
+  document.getElementById('authMessage').textContent = message;
+}
+
+// Controleert in Supabase (tabel roadmap_profiles) of dit account mag inloggen.
+async function lookupAccess(userId) {
+  const { data, error } = await supabase.from('roadmap_profiles').select('role').eq('user_id', userId).maybeSingle();
+  if (error) return { ok: false, reason: 'error', detail: error.message };
+  if (!data || !ALLOWED_ROLES.includes(data.role)) return { ok: false, reason: 'no-access' };
+  return { ok: true, role: data.role };
+}
+
+function showPasswordSetup(session, isInvitation) {
+  passwordSetupMode = isInvitation ? 'invite' : 'recovery';
+  authCallbackPending = false;
+  activeUserId = null;
+  document.getElementById('authMessage').textContent = '';
+  document.getElementById('passwordMessage').textContent = '';
+  setAuthMode('password');
+  document.getElementById('setupTitle').textContent = isInvitation ? 'Uitnodiging accepteren' : 'Wachtwoord instellen';
+  document.getElementById('setupDescription').textContent = isInvitation
+    ? 'Activeer je account door je naam en wachtwoord (minimaal 12 tekens) in te stellen.'
+    : 'Kies een nieuw wachtwoord (minimaal 12 tekens) voor je account.';
+  document.getElementById('setupEmailField').hidden = !isInvitation;
+  document.getElementById('setupNameField').hidden = !isInvitation;
+  document.getElementById('setupName').required = isInvitation;
+  document.getElementById('confirmPasswordField').hidden = !isInvitation;
+  document.getElementById('confirmPassword').required = isInvitation;
+  document.getElementById('setupSubmitBtn').textContent = isInvitation ? 'Account activeren' : 'Wachtwoord opslaan';
+  document.getElementById('setupEmail').value = session.user.email || '';
+  cleanAuthUrl(); // tokens uit de adresbalk halen
+}
+
 async function handleSession(session, eventName = '') {
   if (!session) {
     activeUserId = null;
     currentUserRole = 'user';
+    state = { modules: [], wishes: [] };
+    if (passwordSetupMode) return; // we zitten midden in het instellen van een wachtwoord
     setAuthMode('login');
-    if (authCallbackPending) {
+    if (authCallbackPending && !authTokenHash) {
       document.getElementById('authMessage').textContent = 'Deze link is ongeldig of verlopen. Vraag een nieuwe uitnodiging of resetmail aan.';
     }
     return;
   }
+
+  // 1. Uitnodigings- of resetlink: direct naar het scherm om een wachtwoord aan te maken
+  const isRecovery = eventName === 'PASSWORD_RECOVERY' || authCallbackType === 'recovery';
   const isInvite = authCallbackType === 'invite'
     || authQueryParams.get('invite') === '1'
-    || session.user.user_metadata?.must_set_password;
-  const isRecovery = eventName === 'PASSWORD_RECOVERY' || authCallbackType === 'recovery';
-  if (authCallbackPending || isRecovery || session.user.user_metadata?.must_set_password) {
-    passwordSetupMode = isInvite && !isRecovery ? 'invite' : 'recovery';
-    document.getElementById('authMessage').textContent = '';
-    authCallbackPending = false;
-    activeUserId = null;
-    setAuthMode('password');
-    const isInvitation = passwordSetupMode === 'invite';
-    document.getElementById('setupTitle').textContent = isInvitation ? 'Uitnodiging accepteren' : 'Wachtwoord instellen';
-    document.getElementById('setupDescription').textContent = isInvitation
-      ? 'Activeer je account door je naam en wachtwoord in te stellen.'
-      : 'Kies een nieuw wachtwoord voor je account.';
-    document.getElementById('setupEmailField').hidden = !isInvitation;
-    document.getElementById('setupNameField').hidden = !isInvitation;
-    document.getElementById('setupName').required = isInvitation;
-    document.getElementById('confirmPasswordField').hidden = !isInvitation;
-    document.getElementById('confirmPassword').required = isInvitation;
-    document.getElementById('setupSubmitBtn').textContent = isInvitation ? 'Account activeren' : 'Wachtwoord opslaan';
-    document.getElementById('setupEmail').value = session.user.email || '';
+    || session.user.user_metadata?.must_set_password === true;
+  if (authCallbackPending || isRecovery || session.user.user_metadata?.must_set_password === true) {
+    showPasswordSetup(session, isInvite && !isRecovery);
     return;
   }
   if (passwordSetupMode) return;
   if (activeUserId === session.user.id) return;
-  const { data: profile, error } = await supabase.from('roadmap_profiles').select('role').eq('user_id', session.user.id).maybeSingle();
-  currentUserRole = !error && profile?.role === 'admin' ? 'admin' : 'user';
+
+  // 2. Rechten controleren in Supabase voordat het dashboard wordt getoond
+  const access = await lookupAccess(session.user.id);
+  if (!access.ok) {
+    await denyAccess(access.reason === 'error'
+      ? `Je rechten konden niet worden gecontroleerd: ${access.detail}`
+      : 'Je account heeft geen toestemming om in te loggen. Neem contact op met een beheerder.');
+    return;
+  }
+
+  // 3. Toegestaan: naar de startpagina en gegevens uit Supabase ophalen
+  currentUserRole = access.role;
   activeUserId = session.user.id;
   document.querySelector('[data-view="edit"]').hidden = currentUserRole !== 'admin';
   document.querySelector('[data-view="admin"]').hidden = currentUserRole !== 'admin';
   document.getElementById('wishActionsHeader').hidden = currentUserRole !== 'admin';
   document.getElementById('wishPriorityHeader').hidden = currentUserRole !== 'admin';
+  document.getElementById('authMessage').textContent = '';
   document.getElementById('authGate').hidden = true;
   document.getElementById('appShell').hidden = false;
   document.body.classList.add('authenticated');
-  await init();
-  if (error || !profile) {
-    const notice = document.getElementById('connectionNotice');
-    const existingMessage = notice.hidden ? '' : `${notice.textContent} `;
-    const roleMessage = error
-      ? `Je bent ingelogd als gebruiker, maar je accountrol kon niet worden geladen: ${error.message}`
-      : 'Je bent ingelogd als gebruiker; voor dit account is geen beheerdersrol ingesteld.';
-    notice.textContent = `${existingMessage}${roleMessage}`;
-    notice.hidden = false;
+  if (eventName === 'SIGNED_IN') {
+    cleanAuthUrl();
+    showView('roadmap'); // startpagina van het dashboard
   }
+  await init(); // haalt roadmap en wensen op uit Supabase
 }
 
 function processAuthSession(session, eventName) {
@@ -840,23 +882,32 @@ document.getElementById('passwordSetupForm').addEventListener('submit', async ev
   const button = event.submitter;
   const isInvitation = !document.getElementById('setupNameField').hidden;
   const password = document.getElementById('newPassword').value;
+  const message = document.getElementById('passwordMessage');
   if (isInvitation && password !== document.getElementById('confirmPassword').value) {
-    document.getElementById('passwordMessage').textContent = 'De wachtwoorden zijn niet gelijk.';
+    message.textContent = 'De wachtwoorden zijn niet gelijk.';
     return;
   }
   button.disabled = true;
+  message.textContent = '';
+  const email = document.getElementById('setupEmail').value.trim();
   const userData = isInvitation
     ? { must_set_password: false, full_name: document.getElementById('setupName').value.trim() }
     : { must_set_password: false };
   try {
-    const { data, error } = await supabase.auth.updateUser({ password, data: userData });
+    const { error } = await supabase.auth.updateUser({ password, data: userData });
     if (error) throw error;
     document.getElementById('passwordSetupForm').reset();
-    document.getElementById('passwordMessage').textContent = 'Je account is geactiveerd. Je wordt ingelogd...';
     passwordSetupMode = null;
-    if (data.user) await handleSession({ user: data.user }, 'PASSWORD_UPDATED');
+    authCallbackPending = false;
+    await supabase.auth.signOut();   // niet automatisch inloggen: eerst via de inlogpagina
+    cleanAuthUrl();
+    setAuthMode('login');
+    document.getElementById('loginEmail').value = email;
+    document.getElementById('loginPassword').value = '';
+    document.getElementById('authMessage').textContent = 'Je wachtwoord is ingesteld. Log nu in met je e-mailadres en nieuwe wachtwoord.';
+    document.getElementById('loginPassword').focus();
   } catch (error) {
-    document.getElementById('passwordMessage').textContent = `Account activeren is mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
+    message.textContent = `Wachtwoord instellen is mislukt: ${error instanceof Error ? error.message : 'onbekende fout'}`;
   } finally {
     button.disabled = false;
   }
@@ -907,6 +958,16 @@ supabase.auth.onAuthStateChange((eventName, session) => {
     });
   }, 0);
 });
+
+if (authTokenHash) {
+  supabase.auth.verifyOtp({ token_hash: authTokenHash, type: authCallbackType || 'invite' }).then(({ error }) => {
+    if (error) {
+      cleanAuthUrl();
+      setAuthMode('login');
+      document.getElementById('authMessage').textContent = 'Deze link is ongeldig of verlopen. Vraag een nieuwe uitnodiging of resetmail aan.';
+    }
+  });
+}
 </script>
 </body>
 </html>
