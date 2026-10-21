@@ -335,8 +335,9 @@ function renderRoadmap() {
 }
 
 function renderRoadmapCard(module) {
-  const adminAttributes = currentUserRole === 'admin' ? `class="card roadmap-card" role="button" tabindex="0" data-module-id="${esc(module.id)}" aria-label="Planning van ${esc(module.name)} aanpassen"` : 'class="card"';
-  return `<article ${adminAttributes} style="border-left-color:${developerColours[module.developer] || '#647789'}"><div class="card-title">${esc(module.name)}</div><div class="card-owner">Ontwikkeld door: ${esc(module.developer || 'Niet ingevuld')}</div></article>`;
+  const target = module.target.trim() || 'Niet ingevuld in Supabase';
+  const adminAttributes = currentUserRole === 'admin' ? `class="card roadmap-card" role="button" tabindex="0" data-module-id="${esc(module.id)}" aria-label="Planning van ${esc(module.name)} aanpassen. Doelgroep: ${esc(target)}"` : 'class="card"';
+  return `<article ${adminAttributes} title="Doelgroep: ${esc(target)}" style="border-left-color:${developerColours[module.developer] || '#647789'}"><div class="card-title">${esc(module.name)}</div><div class="card-owner">Ontwikkeld door: ${esc(module.developer || 'Niet ingevuld')}</div></article>`;
 }
 
 function renderWishes() {
